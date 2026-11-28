@@ -1,5 +1,5 @@
 {
-  "lines": 2840512,
-  "updated": "2026-11-27",
-  "note": "PR #3683 同步最新 main（含 #3682）对齐基线"
+  "lines": 2839673,
+  "updated": "2026-11-28",
+  "note": "修复 CVE-2026-4800：FHD/frontend/package.json 新增 lodash-es 4.18.1 override（净增 1 行），能力中心页面日期随生成更新；由仓库管理员 42433422 批准本次安全修复"
 }
