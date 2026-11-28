@@ -43,7 +43,10 @@ def expire(state, run_id):
 
 
 @pytest.mark.parametrize("uncertain", [False, True])
-def test_qualification_receipt_only_claims_not_started_when_certain(uncertain):
+@pytest.mark.parametrize(
+    "code", ["runtime_qualification_evidence_missing", "runtime_model_request_rejected"]
+)
+def test_qualification_receipt_only_claims_not_started_when_certain(uncertain, code):
     from app.application.agent_runtime.chat import runtime_chat_payload
 
     payload = runtime_chat_payload(
@@ -51,12 +54,19 @@ def test_qualification_receipt_only_claims_not_started_when_certain(uncertain):
             "ok": False,
             "execution_state": "blocked",
             "failure_stage": "runtime_setup",
-            "error_code": "runtime_qualification_evidence_missing",
+            "error_code": code,
+            "error": "模型网关拒绝验收请求。",
             "reconciliation_required": uncertain,
         }
     )
     assert payload.get("execution_started") is (None if uncertain else False)
-    assert ("未通过运行验收" in payload["response"]) is not uncertain
+    if not uncertain:
+        expected = (
+            "未通过运行验收"
+            if code == "runtime_qualification_evidence_missing"
+            else "模型网关拒绝验收请求"
+        )
+        assert expected in payload["response"]
     assert payload["requires_reconciliation"] is uncertain
 
 

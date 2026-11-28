@@ -109,7 +109,6 @@ def runtime_chat_payload(result: dict[str, Any], *, conversation_id: str = "") -
         result.get("ok") is False
         and state == "blocked"
         and result.get("failure_stage") == "runtime_setup"
-        and result.get("error_code") == "runtime_qualification_evidence_missing"
         and not any(
             result.get(key) is True
             for key in (
@@ -122,7 +121,10 @@ def runtime_chat_payload(result: dict[str, Any], *, conversation_id: str = "") -
         and not result.get("business_receipts")
         and not result.get("tool_calls")
     )
-    if qualification_blocked:
+    if (
+        qualification_blocked
+        and result.get("error_code") == "runtime_qualification_evidence_missing"
+    ):
         text = "当前模型未通过运行验收，请在模型服务中查看。"
     if result.get("ok") is False and result.get("error_code") == "runtime_budget_exhausted":
         text = "本轮运行时限已耗尽，任务未完成。已收到的回执已保留。"

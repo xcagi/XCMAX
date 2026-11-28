@@ -231,6 +231,26 @@ def _refresh_queued_turn(context: dict[str, Any], view: dict[str, Any]) -> dict[
     ):
         return None
     pending = run.metadata.get("_xiaox_queued_request") or {}
+    if (
+        view["status"] == "unknown"
+        and run.status == "blocked"
+        and receipt.get("state") == "returned"
+        and pending.get("request_key") == key
+        and not requires_retry_reconciliation(run)
+        and isinstance(result, dict)
+        and result.get("failure_stage") == "runtime_setup"
+    ):
+        from app.application.agent_runtime.chat import runtime_chat_payload
+        from app.application.agent_runtime.gateway import public_runtime_result
+
+        payload = runtime_chat_payload(public_runtime_result(result))
+        if payload.get("execution_started") is False:
+            return {
+                **view,
+                "status": "blocked",
+                "requires_reconciliation": False,
+                "message": payload["message"],
+            }
     if view["status"] in {
         "completed",
         "failed",
