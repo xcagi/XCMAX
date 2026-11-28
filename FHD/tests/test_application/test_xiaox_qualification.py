@@ -595,6 +595,7 @@ def test_real_cli_forced_compaction_restart_same_thread_without_probe_replay(
         (429, "runtime_model_rate_limited"),
         (503, "runtime_model_gateway_unavailable"),
         (400, "runtime_model_request_rejected"),
+        (409, "runtime_model_request_conflict"),
     ],
 )
 def test_qualification_persists_public_http_reason_without_body_or_replay(

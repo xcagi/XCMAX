@@ -440,6 +440,8 @@ def _probe_app(route: ModelRoute, probe: _Probe, model_token: str, mcp_token: st
                 probe.error_code = (
                     "runtime_model_auth_failed"
                     if status in {401, 403}
+                    else "runtime_model_request_conflict"
+                    if status == 409
                     else "runtime_model_rate_limited"
                     if status == 429
                     else "runtime_model_gateway_unavailable"

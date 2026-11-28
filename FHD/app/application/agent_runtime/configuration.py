@@ -61,6 +61,7 @@ _QUALIFICATION_ERRORS = {
     "runtime_model_auth_failed": "模型网关拒绝认证，请检查当前模型服务的授权配置。",
     "runtime_model_rate_limited": "模型服务限流或额度不足，请检查额度或稍后重试。",
     "runtime_model_gateway_unavailable": "模型网关服务暂时不可用，请稍后重试。",
+    "runtime_model_request_conflict": "模型网关返回请求冲突（HTTP 409），请先核对原验收请求的回执。",
     "runtime_model_request_rejected": "模型网关拒绝验收请求，请检查模型与接口协议配置。",
     "runtime_model_timeout": "模型验收请求超时，请检查模型服务响应。",
     "runtime_model_connection_failed": "无法连接模型网关，请检查模型服务地址与网络。",
