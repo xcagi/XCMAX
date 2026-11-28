@@ -27,11 +27,10 @@ export default class FrontendShardReporter {
   }
 
   async onTestRunStart(specifications) {
-    this.collection = uniqueFiles(specifications.map(spec => relativeFile(spec.moduleId, this.root)))
-    // Vitest 5 announces the complete collection before its pool partitions it.
-    // Ask its configured sequencer for the selection; do not copy its hashing
-    // algorithm or trust `list --filesOnly --shard` (which lists all files).
-    const selected = this.phase === 'collect'
+    const allSpecs = this.phase === 'collect' && typeof this.ctx.globTestSpecifications === 'function' ? await this.ctx.globTestSpecifications() : specifications
+    this.collection = uniqueFiles(allSpecs.map(spec => relativeFile(spec.moduleId, this.root)))
+    const alreadySharded = Boolean(this.ctx.config.shard) && specifications.length < allSpecs.length
+    const selected = this.phase === 'collect' && !alreadySharded
       ? await new this.ctx.config.sequence.sequencer(this.ctx).shard([...specifications])
       : specifications
     this.selected = uniqueFiles(selected.map(spec => relativeFile(spec.moduleId, this.root)))
