@@ -1012,6 +1012,26 @@ export function useChatOrchestration(options: UseChatViewOptions) {
     const turnId = String(message?.turnId || '').trim()
     if (!message || !turnId) return { ok: false, message: '缺少本轮编号，无法核对。' }
     const scope = captureLocalScope()
+    const isCurrent = () => scope.isCurrent() && messages.value[index] === message
+    try {
+      const data = asRecord(await chatApi.getConversation(scope.sessionId, { turn_id: turnId }))
+      if (!isCurrent()) return { ok: false }
+      if (data.durable === true && data.id === scope.sessionId) {
+        const receipt = droppedRoundFromHistory(data, turnId)
+        if (receipt.activeTurn?.status === 'blocked') return { ok: false, message: receipt.text }
+        if (receipt.status === 'failed' || receipt.status === 'blocked'
+          || (receipt.status === 'completed' && receipt.savedMessage)) {
+          applyPlainTextToMessageIndex(index, receipt.text, {
+            ...chatMessageExtrasFromServerRow(receipt.savedMessage),
+            workflowAction: receipt.workflowAction,
+          })
+          return { ok: true }
+        }
+      }
+    } catch {
+      // A legacy write receipt remains independently useful if history is unavailable.
+    }
+    if (!isCurrent()) return { ok: false }
     try {
       const result = (await chatApi.reconcileTurn(turnId)) as {
         success?: boolean

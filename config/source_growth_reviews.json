@@ -686,16 +686,16 @@
       "review_owner": "@42433422"
     },
     "FHD/frontend/src/composables/useChatOrchestration.ts": {
-      "reason": "Read the original assistant turn upon a durable finish event.",
+      "reason": "Read the original assistant turn upon a durable finish event or an explicit reconciliation.",
       "boundary": "Reuse authenticated history, revision fences, original receipt binding and bounded backoff.",
       "validation": "Regression verifies delivery with the stale task feed.",
       "follow_up": "Measure real delivery timing after loading the candidate frontend.",
       "review_owner": "@42433422",
       "base_file": "FHD/frontend/src/composables/useChatOrchestration.ts",
       "base_blob": "48f7f758035bf4608da53b345512518b934d9431",
-      "head_blob": "586d23039b0579694143aa3b7f0ebae6e3bd2825",
+      "head_blob": "2f1ff6cf6bd4f9abe663b3d3d2b948c507d87ffd",
       "before_lines": 1155,
-      "after_lines": 1184
+      "after_lines": 1204
     },
     "FHD/frontend/src/composables/useVoiceCall.ts": {
       "base_file": "FHD/frontend/src/composables/useVoiceCall.ts",
@@ -724,7 +724,7 @@
     "FHD/frontend/src/views/ChatView.vue": {
       "base_file": "FHD/frontend/src/views/ChatView.vue",
       "base_blob": "e680f0387fd7412d351074d38c86206da020b8f7",
-      "head_blob": "fbb6c6cf84f23fd97127109c2ad8f5e68288e883",
+      "head_blob": "a3048d386300bc0950c51f156cad86f83897ee68",
       "before_lines": 1206,
       "after_lines": 1208,
       "reason": "Review request only: remove the mature Sender focus border requested by the user, retaining the original surface and shadow, with an inset keyboard focus indicator.",

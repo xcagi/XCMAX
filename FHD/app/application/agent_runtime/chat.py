@@ -61,7 +61,7 @@ def stream_runtime_event(event: dict[str, Any]) -> None:
         tool_id = str(item.get("server") or "")
         action = str(item.get("tool") or "")
         status = item.get("status")
-        record = {
+        record: dict[str, Any] = {
             "phase": "progress",
             "node_id": str(item.get("id") or event.get("item_id") or ""),
             "tool_id": tool_id,

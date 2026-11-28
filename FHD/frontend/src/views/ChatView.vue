@@ -1128,7 +1128,7 @@ function emitSwitchView(view: string) {
   caret-color: var(--xc-color-primary);
 }
 
-.chat-composer :deep(.el-textarea__inner:focus-visible) {
+.chat-composer :deep(#messageInput:focus) {
   outline: none;
   box-shadow: inset 0 -1px var(--app-text-muted, #667085);
 }
