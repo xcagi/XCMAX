@@ -1,8 +1,11 @@
-"""Owned attachment boundary with real sessions, database rows and pinned file IO."""
+"""Owned file boundaries and pinned workbook reads with real sessions and file IO."""
 
 import hashlib
-from datetime import UTC, datetime, timedelta
+import io
+import json
+from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from starlette.requests import Request
@@ -12,56 +15,8 @@ from app.db.models.elt import EltUpload
 from app.fastapi_routes.domains.agent.route_support import authenticated_runtime_context
 from app.infrastructure.auth.agent_principal import require_agent_principal
 from app.infrastructure.tenant_scope import tenant_scope
-from evals.run_agent_eval import _authenticated_route_fixture
 from tests.fixtures.backend_ci_isolation import trusted_actor as trusted_actor
-
-
-@pytest.fixture
-def owned(monkeypatch, tmp_path):
-    from app.utils.path_io import path_utils
-
-    monkeypatch.setattr(path_utils, "get_app_data_dir", lambda: str(tmp_path))
-    monkeypatch.setattr(
-        "app.application.tools.workflow_spreadsheet_scope.get_app_data_dir",
-        lambda: str(tmp_path),
-    )
-    monkeypatch.setattr(
-        "app.application.elt.service_uploads.get_app_data_dir", lambda: str(tmp_path)
-    )
-    client = SimpleNamespace(headers={})
-    with _authenticated_route_fixture(client, role_name="admin"):
-        request = Request(
-            {
-                "type": "http",
-                "headers": [(b"x-session-id", client.headers["X-Session-ID"].encode())],
-            }
-        )
-        principal = require_agent_principal(request, x_user_id=None)
-        context = authenticated_runtime_context(
-            {"attachment_upload_ids": ["owned-file"]}, principal
-        )
-        root = tmp_path / "elt" / "uploads" / principal.tenant_id / principal.user_id
-        root.mkdir(parents=True)
-        file = root / "owned-file.csv"
-        raw = b"product,price\npaint,120\n"
-        file.write_bytes(raw)
-        from app.db.session import get_db
-
-        with tenant_scope(int(principal.tenant_id)), get_db() as db:
-            db.add(
-                EltUpload(
-                    id="owned-file",
-                    tenant_id=int(principal.tenant_id),
-                    owner_user_id=int(principal.user_id),
-                    file_name="price.csv",
-                    suffix=".csv",
-                    storage_path=str(file),
-                    size_bytes=len(raw),
-                    sha256=hashlib.sha256(raw).hexdigest(),
-                    expires_at=datetime.now(UTC) + timedelta(hours=1),
-                )
-            )
-        yield context, file
+from tests.fixtures.owned_attachments import owned as owned
 
 
 def test_owned_input_is_readable_without_path_or_implicit_ingestion(owned):
@@ -102,6 +57,203 @@ def test_rejects_expired_session_and_byte_tampering(owned):
     context["_actor_authorization"]["proof"] = "forged"
     with pytest.raises(ValueError, match="授权"):
         resolve_attachment_inputs(context)
+
+
+@pytest.fixture
+def native_page_probes(monkeypatch):
+    from app.application import tabular_workbook
+    from app.application.tools import workflow_spreadsheet_scope
+    from app.utils.performance.cache_manager import LRUTTLCache
+
+    service = workflow_spreadsheet_scope.get_elt_service()
+    probes = SimpleNamespace(
+        build=Mock(wraps=tabular_workbook.build_workbook_facts),
+        actor=Mock(wraps=workflow_spreadsheet_scope._bound_actor),
+        upload=Mock(wraps=service._owned_upload),
+    )
+    monkeypatch.setattr(tabular_workbook, "_PAGE_CACHE", LRUTTLCache(max_size=2, ttl_seconds=120))
+    monkeypatch.setattr(tabular_workbook, "build_workbook_facts", probes.build)
+    monkeypatch.setattr(workflow_spreadsheet_scope, "_bound_actor", probes.actor)
+    monkeypatch.setattr(service, "_owned_upload", probes.upload)
+    return probes
+
+
+def _native_page_workbook(last="last"):
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    workbook.active.append([0, False, last])
+    with io.BytesIO() as stream:
+        workbook.save(stream)
+        body = stream.getvalue()
+    workbook.close()
+    return body
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["owner", "tenant", "upload_expiry", "tampered_bytes", "replaced_snapshot", "session_expiry"],
+)
+def test_native_fact_next_page_rechecks_original_account_ownership(
+    owned, native_page_probes, change
+):
+    from app.db.session import get_db
+    from app.domain.shared_services.tools_workflow_excel_ocr import (
+        _registered_router_excel_analysis,
+    )
+
+    context, csv_file = owned
+    file = csv_file.with_suffix(".xlsx")
+    body = _native_page_workbook()
+    file.write_bytes(body)
+    tenant = int(context["tenant_id"])
+    with tenant_scope(tenant), get_db() as db:
+        upload = db.query(EltUpload).filter(EltUpload.id == "owned-file").one()
+        upload.storage_path, upload.file_name, upload.suffix = str(file), "facts.xlsx", ".xlsx"
+        upload.size_bytes, upload.sha256 = len(body), hashlib.sha256(body).hexdigest()
+    args = {"file_path": "owned-file", "view": "cells", "sheet_name": "Sheet", "max_rows": 1}
+    with tenant_scope(tenant):
+        first = _registered_router_excel_analysis("read", args, context, "shared", "")
+    assert first["success"] is True and first["cells"][0]["value"] == 0
+    args.update(
+        offset=first["next_offset"],
+        expected_sha256=first["source_sha256"],
+        authorization_scope="forged-cache-scope",
+        tenant_id="99",
+        user_id="99",
+        mod_id="forged-mod",
+        _actor_authorization={"session_row_id": 99, "proof": "forged"},
+    )
+    with tenant_scope(tenant):
+        second = _registered_router_excel_analysis("read", args, context, "shared", "")
+    assert second["success"] is True and second["cells"][0]["value"] is False
+    assert second["document_id"] == first["document_id"]
+    assert second["source_ref"] == first["source_ref"]
+    assert first["source_ref"]["authorization_scope"].startswith("workflow:")
+    assert native_page_probes.build.call_count == 1
+    assert native_page_probes.actor.call_count == native_page_probes.upload.call_count == 2
+    assert all(call.args[0] is context for call in native_page_probes.actor.call_args_list)
+
+    args["offset"] = second["next_offset"]
+    if change == "session_expiry":
+        from app.db import HostSessionLocal
+        from app.db.models.user import Session as UserSession
+
+        with HostSessionLocal.begin() as db:
+            db.get(
+                UserSession, context["_actor_authorization"]["session_row_id"]
+            ).expires_at = datetime(2000, 1, 1)
+    elif change in {"tampered_bytes", "replaced_snapshot"}:
+        # Same-size changes must fail the receipt digest, not just its length check.
+        changed = (
+            body[:-1] + bytes([body[-1] ^ 1])
+            if change == "tampered_bytes"
+            else _native_page_workbook(last="replacement")
+        )
+        file.write_bytes(changed)
+        if change == "replaced_snapshot":
+            with tenant_scope(tenant), get_db() as db:
+                upload = db.query(EltUpload).filter(EltUpload.id == "owned-file").one()
+                upload.size_bytes, upload.sha256 = len(changed), hashlib.sha256(changed).hexdigest()
+    else:
+        field, value = {
+            "owner": ("owner_user_id", 99),
+            "tenant": ("tenant_id", 99),
+            "upload_expiry": ("expires_at", datetime(2000, 1, 1)),
+        }[change]
+        with tenant_scope(tenant), get_db() as db:
+            setattr(db.query(EltUpload).filter(EltUpload.id == "owned-file").one(), field, value)
+    with tenant_scope(tenant):
+        denied = _registered_router_excel_analysis("read", args, context, "shared", "")
+    assert denied["success"] is False
+    assert "cells" not in denied
+    assert native_page_probes.build.call_count == 1
+    assert native_page_probes.actor.call_count == 3
+    if change not in {"session_expiry", "replaced_snapshot"}:
+        assert denied["error_code"] == "spreadsheet_access_denied"
+    elif change == "session_expiry":
+        assert "登录会话已失效" in denied["message"]
+    else:
+        assert "SHA-256 mismatch" in denied["message"]
+    assert native_page_probes.upload.call_count == (
+        3 if change in {"tampered_bytes", "replaced_snapshot"} else 2
+    )
+
+
+@pytest.mark.parametrize("boundary", ["session", "mod"])
+def test_native_fact_page_cache_isolates_real_session_and_mod_scopes(
+    trusted_actor, native_page_probes, monkeypatch, tmp_path, boundary
+):
+    from app.application.elt.service_uploads import register_chat_upload
+    from app.db.models.user import Session as UserSession
+    from app.domain.shared_services.tools_workflow_excel_ocr import (
+        _registered_router_excel_analysis,
+    )
+
+    monkeypatch.setenv("XCAGI_DATA_DIR", str(tmp_path / "data"))
+    actor = trusted_actor(mod_id="test-private-mod" if boundary == "mod" else "")
+    if boundary == "session":
+        other_context = trusted_actor(user_id=actor.user_id).context
+    else:
+        # Same account AND session, with a separately authenticated shared-host scope.
+        request = Request(
+            {"type": "http", "headers": [(b"x-session-id", actor.session_id.encode())]}
+        )
+        other_context = authenticated_runtime_context(
+            {}, require_agent_principal(request, x_user_id=None)
+        )
+    with tenant_scope(actor.tenant_id):
+        receipt = register_chat_upload(
+            user=SimpleNamespace(id=actor.user_id, tenant_id=actor.tenant_id),
+            filename="facts.xlsx",
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            stream=io.BytesIO(_native_page_workbook()),
+        )
+    contexts = [
+        {**context, "attachment_upload_ids": [receipt["upload_id"]]}
+        for context in (actor.context, other_context)
+    ]
+    args = {
+        "file_path": receipt["upload_id"],
+        "view": "cells",
+        "sheet_name": "Sheet",
+        "max_rows": 1,
+    }
+    pages = []
+    for context in contexts:
+        with tenant_scope(actor.tenant_id):
+            pages.append(_registered_router_excel_analysis("read", args, context, "shared", ""))
+        assert pages[-1]["success"] is True, pages[-1]
+    assert pages[0]["source_sha256"] == pages[1]["source_sha256"]
+    assert pages[0]["document_id"] != pages[1]["document_id"]
+    assert (
+        pages[0]["source_ref"]["authorization_scope"]
+        != pages[1]["source_ref"]["authorization_scope"]
+    )
+    assert native_page_probes.build.call_count == 2
+    args.update(
+        offset=pages[0]["next_offset"],
+        expected_sha256=pages[0]["source_sha256"],
+        authorization_scope=pages[1]["source_ref"]["authorization_scope"],
+        _actor_authorization=other_context["_actor_authorization"],
+    )
+    with tenant_scope(actor.tenant_id):
+        next_page = _registered_router_excel_analysis("read", args, contexts[0], "shared", "")
+    assert next_page["success"] is True and next_page["cells"][0]["value"] is False
+    assert next_page["document_id"] == pages[0]["document_id"]
+    assert native_page_probes.build.call_count == 2
+    assert native_page_probes.actor.call_count == native_page_probes.upload.call_count == 3
+    if boundary == "mod":
+        with actor.factory.begin() as db:
+            db.get(UserSession, actor.session_row_id).entitled_mod_ids_json = "[]"
+        with tenant_scope(actor.tenant_id):
+            denied = _registered_router_excel_analysis("read", args, contexts[0], "shared", "")
+            shared = _registered_router_excel_analysis("read", args, contexts[1], "shared", "")
+        assert denied["success"] is False and "未开通该 Mod" in denied["message"]
+        assert shared["success"] is True and shared["document_id"] == pages[1]["document_id"]
+        assert native_page_probes.build.call_count == 2
+        assert native_page_probes.actor.call_count == 5
+        assert native_page_probes.upload.call_count == 4
 
 
 def test_legacy_paths_never_become_owned_artifacts():
@@ -271,16 +423,78 @@ def test_workbook_preview_preserves_zero_false_and_declares_partial_coverage():
     raw = io.BytesIO()
     workbook.save(raw)
     text, coverage = _decode(raw.getvalue(), ".xlsx")
-    assert "0 | False |  | value" in text
+    _, row = text.splitlines()
+    assert row.startswith("[A1:D1] ")
+    assert json.loads(row.split("] ", 1)[1]) == ["0", "False", "", "value"]
     assert coverage["truncated"] is False
     sheet.cell(201, 1, "outside preview")
+    sheet.cell(2, 41, "outside column budget")
     raw = io.BytesIO()
     workbook.save(raw)
     text, coverage = _decode(raw.getvalue(), ".xlsx")
     assert "outside preview" not in text
+    assert "outside column budget" not in text
     assert coverage["truncated"] is True
     assert coverage["max_rows_per_sheet"] == 200
     assert "部分" in coverage["notice"]
+
+
+def test_workbook_preview_preserves_sparse_physical_addresses_and_sheet_boundaries():
+    import io
+
+    from openpyxl import Workbook
+
+    from app.application.agent_orchestrator.attachment_inputs import _decode
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "First"
+    sheet.merge_cells("B2:D2")
+    sheet["B2"] = "Merged title"
+    sheet["B4"] = "  spaced  "
+    sheet["C4"] = "=1+1"
+    sheet["D5"] = "multiline\nvalue | literal separator"
+    second = workbook.create_sheet("Second")
+    second["C1"] = "independent position"
+    raw = io.BytesIO()
+    workbook.save(raw)
+    workbook.close()
+
+    text, coverage = _decode(raw.getvalue(), ".xlsx")
+    lines = text.splitlines()
+    assert lines[0] == '[工作表] "First"'
+    first = [line.split("] ", 1) for line in lines[1:6]]
+    assert [address + "]" for address, _ in first] == [f"[A{r}:D{r}]" for r in range(1, 6)]
+    assert json.loads(first[1][1]) == ["", "Merged title", "", ""]
+    assert json.loads(first[2][1]) == ["", "", "", ""]
+    assert json.loads(first[3][1]) == ["", "  spaced  ", "", ""]
+    assert json.loads(first[4][1]) == ["", "", "", "multiline\nvalue | literal separator"]
+    assert lines[6] == '[工作表] "Second"'
+    assert lines[7].startswith("[A1:C1] ")
+    assert json.loads(lines[7].split("] ", 1)[1]) == ["", "", "independent position"]
+    assert coverage["truncated"] is False
+
+
+def test_workbook_character_cap_never_returns_part_of_an_addressed_row():
+    import io
+
+    from openpyxl import Workbook
+
+    from app.application.agent_orchestrator.attachment_inputs import MAX_TEXT, _decode
+
+    workbook = Workbook()
+    for _ in range(6):
+        workbook.active.append(["x" * 500] * 40)
+    raw = io.BytesIO()
+    workbook.save(raw)
+    workbook.close()
+
+    text, coverage = _decode(raw.getvalue(), ".xlsx")
+    assert coverage["truncated"] is True and len(text) <= MAX_TEXT
+    header, row = text.splitlines()
+    assert header.startswith("[工作表] ")
+    assert row.startswith("[A1:AN1] ")
+    assert json.loads(row.split("] ", 1)[1]) == ["x" * 500] * 40
 
 
 def test_text_preview_reports_character_limit():
@@ -532,152 +746,3 @@ def test_expired_unbound_filename_does_not_resolve(owned):
         with pytest.raises(PermissionError, match="文件不属于"):
             with workflow_file_snapshot("price.csv", unbound):
                 pytest.fail("an expired upload must never match a bare filename")
-
-
-def _docx_bytes(document):
-    import io
-
-    stream = io.BytesIO()
-    document.save(stream)
-    return stream.getvalue()
-
-
-def test_docx_preview_keeps_body_order_and_cell_coordinates():
-    from docx import Document
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
-
-    from app.application.agent_orchestrator.attachment_inputs import _decode
-
-    document = Document()
-    document.add_paragraph("Introduction")
-    table = document.add_table(rows=3, cols=4)
-    table.cell(0, 0).text = "SKU | Item"
-    table.cell(0, 2).merge(table.cell(0, 3)).text = "Quoted price"
-    table.cell(1, 0).merge(table.cell(2, 0)).text = "Paint"
-    table.cell(1, 2).text = "0"
-    table.cell(2, 2).text = "120"
-    row = table.rows[2]._tr
-    row.remove(row.tc_lst[0])
-    before = OxmlElement("w:gridBefore")
-    before.set(qn("w:val"), "1")
-    row.get_or_add_trPr().append(before)
-    document.add_paragraph("Terms")
-    document.add_table(rows=1, cols=1).cell(0, 0).text = "Net 30"
-
-    text, coverage = _decode(_docx_bytes(document), ".docx")
-    assert text.splitlines() == [
-        "Introduction",
-        "[表格 1 行 1 列 1] SKU | Item",
-        "[表格 1 行 1 列 3] Quoted price",
-        "[表格 1 行 2 列 1] Paint",
-        "[表格 1 行 2 列 3] 0",
-        "[表格 1 行 3 列 3] 120",
-        "Terms",
-        "[表格 2 行 1 列 1] Net 30",
-    ]
-    assert coverage["scope"] == "paragraphs_and_tables"
-    assert coverage["truncated"] is False
-
-
-def test_docx_preview_marks_nested_table_omission_without_misattribution():
-    from docx import Document
-
-    from app.application.agent_orchestrator.attachment_inputs import _decode
-
-    document = Document()
-    outer = document.add_table(rows=1, cols=1).cell(0, 0)
-    outer.text = "parent cell"
-    outer.add_table(rows=1, cols=1).cell(0, 0).text = "nested only"
-
-    text, coverage = _decode(_docx_bytes(document), ".docx")
-    assert text.strip() == "[表格 1 行 1 列 1] parent cell"
-    assert coverage["truncated"] is True
-
-
-def test_docx_preview_reports_omitted_content_control():
-    from docx import Document
-    from docx.oxml import OxmlElement
-
-    from app.application.agent_orchestrator.attachment_inputs import _decode
-
-    document = Document()
-    document.add_paragraph("visible")
-    wrapped = document.add_paragraph("wrapped content")._p
-    control = OxmlElement("w:sdt")
-    content = OxmlElement("w:sdtContent")
-    control.append(content)
-    wrapped.addprevious(control)
-    content.append(wrapped)
-
-    text, coverage = _decode(_docx_bytes(document), ".docx")
-    assert text == "visible"
-    assert coverage["truncated"] is True
-
-
-def test_docx_preview_rejects_oversized_expanded_package():
-    import io
-    from zipfile import ZIP_DEFLATED, ZipFile
-
-    from docx import Document
-
-    from app.application.agent_orchestrator.attachment_inputs import AttachmentInputError, _decode
-
-    stream = io.BytesIO(_docx_bytes(Document()))
-    with ZipFile(stream, "a", ZIP_DEFLATED) as archive:
-        archive.writestr("word/unused.bin", b"\0" * (32 * 1024 * 1024))
-
-    with pytest.raises(AttachmentInputError, match="体积过大"):
-        _decode(stream.getvalue(), ".docx")
-
-
-@pytest.mark.parametrize("broken", [False, True])
-def test_owned_docx_preview_uses_only_verified_upload(monkeypatch, broken):
-    import io
-    from contextlib import nullcontext
-    from unittest.mock import Mock
-
-    from docx import Document
-
-    from app.application.agent_orchestrator import attachment_inputs
-
-    document = Document()
-    document.add_table(rows=1, cols=1).cell(0, 0).text = "quoted value"
-    raw = b"not a DOCX" if broken else _docx_bytes(document)
-    row = SimpleNamespace(
-        id="owned-file",
-        file_name="quote.docx",
-        suffix=".docx",
-        storage_path="pinned-file",
-        size_bytes=len(raw),
-        sha256=hashlib.sha256(raw).hexdigest(),
-        expires_at=datetime.now(UTC) + timedelta(hours=1),
-    )
-    db = Mock()
-    db.query.return_value.filter.return_value.first.return_value = row
-    opened = Mock(return_value=io.BytesIO(raw))
-    monkeypatch.setattr(attachment_inputs, "get_db", lambda: nullcontext(db))
-    monkeypatch.setattr(attachment_inputs, "tenant_scope", lambda _: nullcontext())
-    monkeypatch.setattr(attachment_inputs, "validate_actor_context", lambda _: None)
-    monkeypatch.setattr(attachment_inputs, "open_elt_input_file", opened)
-    context = {
-        "user_id": 7,
-        "tenant_id": 13,
-        "attachment_upload_ids": [row.id],
-        "file_context": {"verified_uploads": [{"text": "untrusted fallback"}]},
-    }
-
-    if broken:
-        with pytest.raises(attachment_inputs.AttachmentInputError, match="解析失败"):
-            attachment_inputs.resolve_attachment_context(context)
-    else:
-        resolved, (artifact,) = attachment_inputs.resolve_attachment_context(context)
-        assert artifact["source"] == "owned_elt_upload"
-        assert artifact["metadata"]["upload_id"] == row.id
-        assert artifact["preview"]["text"].strip() == "[表格 1 行 1 列 1] quoted value"
-        assert resolved["file_context"] == {
-            "verified_uploads": [
-                {"name": row.file_name, "upload_id": row.id, **artifact["preview"]}
-            ]
-        }
-    opened.assert_called_once_with(row.storage_path, owner_user_id=7)
