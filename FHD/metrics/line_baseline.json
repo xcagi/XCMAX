@@ -1,5 +1,5 @@
 {
-  "lines": 2839673,
+  "lines": 2839789,
   "updated": "2026-11-28",
-  "note": "修复 CVE-2026-4800：FHD/frontend/package.json 新增 lodash-es 4.18.1 override（净增 1 行），能力中心页面日期随生成更新；由仓库管理员 42433422 批准本次安全修复"
+  "note": "PR #3714: add MOD initialization route isolation regression tests (+116 lines)"
 }
