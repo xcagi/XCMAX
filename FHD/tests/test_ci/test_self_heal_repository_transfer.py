@@ -36,8 +36,7 @@ def incident(extra: str = "") -> dict:
             "- Branch: `main`\n"
             f"- Head Repository: `{OLD}`\n"
             f"- Self-Heal-Run: `{RUN_ID}/1`\n"
-            f"- Self-Heal-Workflow: `291181633@{PATH}`\n"
-            + extra
+            f"- Self-Heal-Workflow: `291181633@{PATH}`\n" + extra
         ),
     }
 

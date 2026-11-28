@@ -177,8 +177,7 @@ def _verified_repository_migration(
     """Accept historical names only for the exact original GitHub repository ID."""
     repo_pattern = r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}"
     if source_id <= 0 or any(
-        not re.fullmatch(repo_pattern, name) or ".." in name
-        for name in (repo, previous, current)
+        not re.fullmatch(repo_pattern, name) or ".." in name for name in (repo, previous, current)
     ):
         return False
     run = _get(get, f"/repos/{repo}/actions/runs/{run_id}")
@@ -238,16 +237,11 @@ def reconcile_source(issue: dict[str, Any], repo: str, get: Getter) -> Decision:
     if decision.action == BLOCK:
         return decision
     recorded_id = fields.get("Head Repository ID", "")
-    if recorded_id and (
-        not recorded_id.isdecimal() or int(recorded_id) != decision.head_repo_id
-    ):
+    if recorded_id and (not recorded_id.isdecimal() or int(recorded_id) != decision.head_repo_id):
         return Decision(BLOCK, "incident_source_repository_id_mismatch", run_id=run_id)
-    if (
-        fields.get("Branch") != decision.head_branch
-        or (
-            fields.get("Self-Heal-Workflow")
-            and fields["Self-Heal-Workflow"] != f"{decision.workflow_id}@{decision.workflow_path}"
-        )
+    if fields.get("Branch") != decision.head_branch or (
+        fields.get("Self-Heal-Workflow")
+        and fields["Self-Heal-Workflow"] != f"{decision.workflow_id}@{decision.workflow_path}"
     ):
         return Decision(BLOCK, "incident_source_branch_or_repository_mismatch", run_id=run_id)
     previous_repo = fields.get("Head Repository", repo)
@@ -454,9 +448,7 @@ def source_markers(decision: Decision, *, include_source: bool = True) -> list[s
 def find_marked_issue(get: Getter, repo: str, markers: list[str]) -> str:
     """在 auto-incident issue 中查找已带相同标记的单；查询失败抛 LookupFailed。"""
     # Workflow identity is shared by many sources; it must never deduplicate by itself.
-    identities = [
-        m for m in markers if m.startswith(("Self-Heal-Run:", "Self-Heal-Source:"))
-    ]
+    identities = [m for m in markers if m.startswith(("Self-Heal-Run:", "Self-Heal-Source:"))]
     for item in pages(
         get,
         f"/repos/{repo}/issues",
