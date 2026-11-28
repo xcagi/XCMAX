@@ -437,13 +437,14 @@ describe('mods store – coverage 补齐', () => {
   })
 
   afterEach(() => {
-    const warnings = vi.mocked(console.warn).mock.calls.filter(([message]) =>
+    const warnMock = vi.mocked(console.warn)
+    const warnings = (warnMock.mock?.calls ?? []).filter(([message]) =>
       typeof message === 'string' && (
         message.startsWith('[mods] registerModRoutes after initialize failed:') ||
         message.startsWith('[mods] revoke runtime routes after server disable failed:')
       ),
     )
-    vi.mocked(console.warn).mockRestore()
+    warnMock.mockRestore?.()
     expect(warnings).toEqual([])
   })
 
