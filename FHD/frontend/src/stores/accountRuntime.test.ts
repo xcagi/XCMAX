@@ -8,7 +8,7 @@ const boundary = await vi.hoisted(async () => {
   const { reactive, ref } = await import('vue')
   return {
     get: vi.fn(), post: vi.fn(), authEpoch: ref(0), accountEpoch: ref(0),
-    account: reactive({ refreshFromServer: vi.fn(), workspaceReady: true, workspaceHydrationReady: true, localUserId: 41 as number | null, isImpersonating: false }),
+    account: reactive({ workspaceReady: true, workspaceHydrationReady: true, localUserId: 41 as number | null, isImpersonating: false }),
   }
 })
 vi.mock('@/api/core', () => ({ api: { get: boundary.get, post: boundary.post } }))
@@ -230,15 +230,15 @@ describe('account runtime lifecycle', () => {
     expect(boundary.post).not.toHaveBeenCalled()
   })
 
-  it('restores workspace readiness for an explicit qualification before posting', async () => {
+  it('allows an authenticated explicit check while workspace stores hydrate', async () => {
     boundary.account.workspaceHydrationReady = false
-    boundary.account.refreshFromServer.mockImplementationOnce(async () => {
-      boundary.account.workspaceHydrationReady = true
-    })
     boundary.get.mockResolvedValueOnce(snapshot('required')).mockResolvedValueOnce(snapshot('passed'))
-    await useAccountRuntimeStore().retry()
-    expect(boundary.account.refreshFromServer).toHaveBeenCalledWith({ keepVisible: true })
+    const runtime = useAccountRuntimeStore()
+    await runtime.start()
+    expect(boundary.get).not.toHaveBeenCalled()
+    await runtime.retry()
     expect(boundary.post).toHaveBeenCalledOnce()
+    expect(runtime.status?.qualification).toBe('passed')
   })
 
   it('keeps deployment-owned configuration read-only on startup and on a user check', async () => {

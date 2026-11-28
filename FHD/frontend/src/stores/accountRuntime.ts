@@ -44,8 +44,8 @@ export const useAccountRuntimeStore = defineStore('accountRuntime', () => {
   let started = false, generation = 0, polls = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   let operation: { controller: AbortController; mode: ReadMode; promise?: Promise<void> } | null = null
-  const eligible = () => account.workspaceReady && account.workspaceHydrationReady &&
-    account.localUserId != null && !account.isImpersonating
+  const authenticated = () => account.localUserId != null && !account.isImpersonating
+  const eligible = () => authenticated() && account.workspaceReady && account.workspaceHydrationReady
   const busy = computed(() => loading.value || checking.value || status.value?.qualification === 'in_progress')
   const failed = computed(() => !!errorMessage.value || ['failed', 'interrupted', 'blocked'].includes(status.value?.qualification || ''))
   const message = computed(() => {
@@ -77,7 +77,7 @@ export const useAccountRuntimeStore = defineStore('accountRuntime', () => {
   }
 
   function read(mode: ReadMode, polling = false): Promise<void> {
-    if (!eligible()) return Promise.resolve()
+    if (!(mode === 'retry' ? authenticated() : eligible())) return Promise.resolve()
     if (operation) {
       if (mode === 'retry') operation.mode = mode
       return operation.promise!
@@ -137,22 +137,12 @@ export const useAccountRuntimeStore = defineStore('accountRuntime', () => {
   }
 
   const refresh = () => read('read')
-  async function retry() {
-    if (eligible()) return read('retry')
-    if (account.localUserId == null || account.isImpersonating) {
-      errorMessage.value = '当前账号尚未就绪，请确认登录后再运行验收。'
-      return
-    }
-    const owner = generation, sameAccount = captureAuthSession()
-    try {
-      await account.refreshFromServer({ keepVisible: true })
-    } catch (error) {
-      if (owner === generation && sameAccount()) errorMessage.value = failureMessage(error)
-      return
-    }
-    if (owner !== generation || !sameAccount()) return
-    if (eligible()) return read('retry')
-    errorMessage.value = '企业工作空间尚未就绪，请刷新账号状态后再运行验收。'
+  function retry() {
+    // The authenticated endpoint independently validates account and route.
+    // An explicit check can run while unrelated workspace stores hydrate.
+    if (authenticated()) return read('retry')
+    errorMessage.value = '当前账号尚未就绪，请确认登录后再运行验收。'
+    return Promise.resolve()
   }
   const start = () => { started = true; return read('read') }
   function stop() { started = false; invalidate() }
