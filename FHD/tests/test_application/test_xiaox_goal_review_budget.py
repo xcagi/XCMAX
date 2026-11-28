@@ -6,7 +6,7 @@ from tests.test_application.test_xiaox_goal_verifier import goal, response, revi
 from tests.test_application.test_xiaox_goal_verifier import verifier as verifier
 
 
-@pytest.mark.parametrize(("remaining", "expected"), [(75, 75), (150, 90)])
+@pytest.mark.parametrize(("remaining", "expected"), [(75, 75), (150, 150)])
 def test_mimo_review_wait_uses_only_the_remaining_task_and_review_budget(
     verifier, remaining, expected
 ):

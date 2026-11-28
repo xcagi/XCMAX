@@ -230,6 +230,17 @@ describe('account runtime lifecycle', () => {
     expect(boundary.post).not.toHaveBeenCalled()
   })
 
+  it('allows an authenticated explicit check while workspace stores hydrate', async () => {
+    boundary.account.workspaceHydrationReady = false
+    boundary.get.mockResolvedValueOnce(snapshot('required')).mockResolvedValueOnce(snapshot('passed'))
+    const runtime = useAccountRuntimeStore()
+    await runtime.start()
+    expect(boundary.get).not.toHaveBeenCalled()
+    await runtime.retry()
+    expect(boundary.post).toHaveBeenCalledOnce()
+    expect(runtime.status?.qualification).toBe('passed')
+  })
+
   it('keeps deployment-owned configuration read-only on startup and on a user check', async () => {
     boundary.get.mockResolvedValue({ ...snapshot('required'), managed_by: 'deployment', message: '请由部署方完成本机验收' })
     const runtime = useAccountRuntimeStore()

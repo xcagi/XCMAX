@@ -576,6 +576,19 @@ describe('useChatOrchestration stream', () => {
     expect(api.messages.value[0]).toEqual(message)
   })
 
+  it('reads the original blocked execution before consulting write evidence', async () => {
+    const api = useChatOrchestration({ sessionId: ref('blocked-session') })
+    api.messages.value = [{ role: 'ai', content: '结果未知', time: '', turnId: 'turn_blocked', workflowAction: 'unknown' }]
+    const reason = '模型网关拒绝验收请求。'
+    getConversation.mockResolvedValueOnce({ id: 'blocked-session', durable: true, active_turn: {
+      turn_id: 'turn_blocked', run_id: 'run_blocked', status: 'blocked', message: reason,
+    } })
+
+    expect(await api.reconcileTurnMessage(0)).toEqual({ ok: false, message: reason })
+    expect(getConversation).toHaveBeenCalledWith('blocked-session', { turn_id: 'turn_blocked' })
+    expect(reconcileTurn).not.toHaveBeenCalled()
+  })
+
   it('can confirm no writes on a failed turn without a recorded uncertain workflow effect', async () => {
     const api = useChatOrchestration({ sessionId: ref('failed-session') })
     api.messages.value = [{ role: 'ai', content: '请求失败', time: '', turnId: 'turn_failed', workflowAction: 'failed' }]

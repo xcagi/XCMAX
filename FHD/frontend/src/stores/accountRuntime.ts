@@ -44,8 +44,8 @@ export const useAccountRuntimeStore = defineStore('accountRuntime', () => {
   let started = false, generation = 0, polls = 0
   let timer: ReturnType<typeof setTimeout> | undefined
   let operation: { controller: AbortController; mode: ReadMode; promise?: Promise<void> } | null = null
-  const eligible = () => account.workspaceReady && account.workspaceHydrationReady &&
-    account.localUserId != null && !account.isImpersonating
+  const authenticated = () => account.localUserId != null && !account.isImpersonating
+  const eligible = () => authenticated() && account.workspaceReady && account.workspaceHydrationReady
   const busy = computed(() => loading.value || checking.value || status.value?.qualification === 'in_progress')
   const failed = computed(() => !!errorMessage.value || ['failed', 'interrupted', 'blocked'].includes(status.value?.qualification || ''))
   const message = computed(() => {
@@ -77,7 +77,7 @@ export const useAccountRuntimeStore = defineStore('accountRuntime', () => {
   }
 
   function read(mode: ReadMode, polling = false): Promise<void> {
-    if (!eligible()) return Promise.resolve()
+    if (!(mode === 'retry' ? authenticated() : eligible())) return Promise.resolve()
     if (operation) {
       if (mode === 'retry') operation.mode = mode
       return operation.promise!
@@ -137,7 +137,13 @@ export const useAccountRuntimeStore = defineStore('accountRuntime', () => {
   }
 
   const refresh = () => read('read')
-  const retry = () => read('retry')
+  function retry() {
+    // The authenticated endpoint independently validates account and route.
+    // An explicit check can run while unrelated workspace stores hydrate.
+    if (authenticated()) return read('retry')
+    errorMessage.value = '当前账号尚未就绪，请确认登录后再运行验收。'
+    return Promise.resolve()
+  }
   const start = () => { started = true; return read('read') }
   function stop() { started = false; invalidate() }
   function modelChanged() { invalidate(); if (started) void read('read') }
