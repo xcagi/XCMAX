@@ -137,7 +137,23 @@ export const useAccountRuntimeStore = defineStore('accountRuntime', () => {
   }
 
   const refresh = () => read('read')
-  const retry = () => read('retry')
+  async function retry() {
+    if (eligible()) return read('retry')
+    if (account.localUserId == null || account.isImpersonating) {
+      errorMessage.value = '当前账号尚未就绪，请确认登录后再运行验收。'
+      return
+    }
+    const owner = generation, sameAccount = captureAuthSession()
+    try {
+      await account.refreshFromServer({ keepVisible: true })
+    } catch (error) {
+      if (owner === generation && sameAccount()) errorMessage.value = failureMessage(error)
+      return
+    }
+    if (owner !== generation || !sameAccount()) return
+    if (eligible()) return read('retry')
+    errorMessage.value = '企业工作空间尚未就绪，请刷新账号状态后再运行验收。'
+  }
   const start = () => { started = true; return read('read') }
   function stop() { started = false; invalidate() }
   function modelChanged() { invalidate(); if (started) void read('read') }

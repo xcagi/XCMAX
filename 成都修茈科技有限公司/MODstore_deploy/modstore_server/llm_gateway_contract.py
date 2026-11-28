@@ -168,7 +168,7 @@ def codex_catalog_support(
             provider, route.model, model_context_capabilities(provider, route.model, row)
         )
     except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        detail: dict[str, Any] = exc.detail if isinstance(exc.detail, dict) else {}
         return {
             "selectable": False,
             "code": detail.get("code", "CODEX_ROUTE_UNAVAILABLE"),

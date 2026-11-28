@@ -8,7 +8,7 @@ const boundary = await vi.hoisted(async () => {
   const { reactive, ref } = await import('vue')
   return {
     get: vi.fn(), post: vi.fn(), authEpoch: ref(0), accountEpoch: ref(0),
-    account: reactive({ workspaceReady: true, workspaceHydrationReady: true, localUserId: 41 as number | null, isImpersonating: false }),
+    account: reactive({ refreshFromServer: vi.fn(), workspaceReady: true, workspaceHydrationReady: true, localUserId: 41 as number | null, isImpersonating: false }),
   }
 })
 vi.mock('@/api/core', () => ({ api: { get: boundary.get, post: boundary.post } }))
@@ -228,6 +228,17 @@ describe('account runtime lifecycle', () => {
     expect(boundary.get).toHaveBeenCalledOnce()
     expect(runtime.status?.qualification).toBe('required')
     expect(boundary.post).not.toHaveBeenCalled()
+  })
+
+  it('restores workspace readiness for an explicit qualification before posting', async () => {
+    boundary.account.workspaceHydrationReady = false
+    boundary.account.refreshFromServer.mockImplementationOnce(async () => {
+      boundary.account.workspaceHydrationReady = true
+    })
+    boundary.get.mockResolvedValueOnce(snapshot('required')).mockResolvedValueOnce(snapshot('passed'))
+    await useAccountRuntimeStore().retry()
+    expect(boundary.account.refreshFromServer).toHaveBeenCalledWith({ keepVisible: true })
+    expect(boundary.post).toHaveBeenCalledOnce()
   })
 
   it('keeps deployment-owned configuration read-only on startup and on a user check', async () => {
