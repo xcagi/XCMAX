@@ -409,6 +409,8 @@ def _prepared_route(connection: Connection, selected: tuple[str, str] | None) ->
             break
         except MarketModelError as exc:
             message = {
+                "INVALID_CHAT_PREFERENCE": "所选模型未通过账号路由校验，请核对供应商、聊天能力和账号授权。",
+                "NO_BYOK_CHAT_MODEL": "当前账号的自带密钥没有可用聊天模型，请核对 BYOK 设置。",
                 "CODEX_MODEL_UNSUPPORTED": "当前模型地址或密钥协议不支持独立运行，请在已有模型设置中核对模型服务。",
                 "CODEX_MODEL_METADATA_REQUIRED": "当前模型缺少已确认的独立上游厂商和真实模型标识，请在模型设置中核对。",
                 "CODEX_MODEL_CAPACITY_REQUIRED": "当前模型缺少有效的上下文容量和最大输出量，请在模型设置中补全。",

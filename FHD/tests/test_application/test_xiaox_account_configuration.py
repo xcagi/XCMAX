@@ -310,6 +310,23 @@ def test_staging_only_prepares_a_pinned_route_and_qualifies_on_execution(account
     assert account.calls[-1].url.params["model"] == "team-model"
 
 
+def test_market_rejection_explains_invalid_account_route_without_remote_text(account, monkeypatch):
+    def rejected(request):
+        return httpx.Response(
+            400, json={"detail": {"code": "INVALID_CHAT_PREFERENCE", "message": "private-route"}}
+        )
+
+    monkeypatch.setattr(
+        configuration,
+        "httpx_sync_client",
+        lambda **kwargs: httpx.Client(transport=httpx.MockTransport(rejected), **kwargs),
+    )
+    with pytest.raises(configuration.RuntimeSetupError, match="账号路由校验") as exc:
+        configuration.validate_account_model_choice("41", ("qwen", "qwen-max"))
+    assert "private-route" not in exc.value.public_message
+    assert account.attempts == []
+
+
 def test_failed_setup_preserves_only_safe_diagnostic_code_and_checks(account, tmp_path):
     account.succeeds = False
     account.error_code = "runtime_billing_evidence_missing"
